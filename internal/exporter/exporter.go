@@ -14,6 +14,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	log "github.com/sirupsen/logrus"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -23,6 +24,13 @@ const (
 
 	deviceService = "SpaceX.API.Device.Device"
 	handleMethod  = "Handle"
+
+	// rpcTimeout bounds each dish call so a powered-off dish cannot hold a scrape
+	// past a typical Prometheus scrape timeout. The default gRPC connect timeout is 20s.
+	rpcTimeout = 3 * time.Second
+
+	// offlineState is published when the dish does not answer.
+	offlineState = "OFF"
 )
 
 // Exporter collects Starlink stats from the dish and exports them as Prometheus metrics.
@@ -43,12 +51,19 @@ type Exporter struct {
 	outageSeconds *prometheus.GaugeVec
 }
 
-// New dials the dish, loads its protobuf schema, and reads identity from get_status.
+// New dials the dish and, when it answers, loads its protobuf schema and identity.
+// An unreachable dish still returns an exporter so /metrics can report state OFF.
 func New(address string) (*Exporter, error) {
+	bo := backoff.DefaultConfig
+	bo.MaxDelay = 10 * time.Second
 	conn, err := grpc.NewClient(
 		address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(32<<20)),
+		grpc.WithConnectParams(grpc.ConnectParams{
+			Backoff:           bo,
+			MinConnectTimeout: rpcTimeout,
+		}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("dial dish: %w", err)
@@ -77,23 +92,36 @@ func New(address string) (*Exporter, error) {
 		}, []string{"cause"}),
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// A down dish must not prevent the process from serving metrics.
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
 	if err := e.resolve(ctx); err != nil {
-		conn.Close()
-		return nil, err
+		log.Warnf("dish unreachable at startup (%s); reporting state %s until it responds", err, offlineState)
+		return e, nil
 	}
 
 	status, err := e.call(ctx, "get_status")
 	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("read dish status: %w", err)
+		log.Warnf("dish status unavailable at startup (%s); reporting state %s until it responds", err, offlineState)
+		return e, nil
+	}
+	e.noteIdentity(status)
+	return e, nil
+}
+
+func (e *Exporter) noteIdentity(status *dynamic.Message) {
+	if e.DishID != "" {
+		return
 	}
 	info := child(status, "device_info")
-	e.DishID = stringField(info, "id")
+	id := stringField(info, "id")
+	if id == "" {
+		return
+	}
+	e.DishID = id
 	e.Hardware = stringField(info, "hardware_version")
 	e.Software = stringField(info, "software_version")
-	return e, nil
+	log.Infof("dish id: %s hardware: %s software: %s", e.DishID, e.Hardware, e.Software)
 }
 
 func (e *Exporter) resolve(ctx context.Context) error {
@@ -217,15 +245,24 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	defer e.mu.Unlock()
 
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), rpcTimeout)
 	defer cancel()
+
+	if e.method == nil {
+		if err := e.resolve(ctx); err != nil {
+			log.Errorf("dish unreachable: %s", err)
+			emitOffline(ch, start)
+			return
+		}
+	}
 
 	status, err := e.call(ctx, "get_status")
 	if err != nil {
 		log.Errorf("get_status failed: %s", err)
-		emit(ch, dishUp, 0)
+		emitOffline(ch, start)
 		return
 	}
+	e.noteIdentity(status)
 
 	history, histErr := e.call(ctx, "get_history")
 	if histErr != nil {
@@ -242,6 +279,16 @@ func (e *Exporter) Collect(ch chan<- prometheus.Metric) {
 	}
 
 	emit(ch, dishUp, 1)
+	emit(ch, dishScrapeDurationSeconds, time.Since(start).Seconds())
+}
+
+// emitOffline publishes a static off state when the dish cannot be scraped.
+// starlink_dish_up stays 0 so a failed scrape is still visible.
+func emitOffline(ch chan<- prometheus.Metric, start time.Time) {
+	emit(ch, dishUp, 0)
+	emit(ch, dishHistoryUp, 0)
+	emit(ch, dishState, stateNumber(offlineState))
+	ch <- prometheus.MustNewConstMetric(dishStateName, prometheus.GaugeValue, 1, offlineState)
 	emit(ch, dishScrapeDurationSeconds, time.Since(start).Seconds())
 }
 

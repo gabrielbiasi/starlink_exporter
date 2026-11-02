@@ -269,6 +269,8 @@ func stateNumber(state string) float64 {
 		return 2
 	case "BOOTING":
 		return 3
+	case "OFF":
+		return 5
 	case "":
 		return 0
 	default:

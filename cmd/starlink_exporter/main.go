@@ -23,7 +23,6 @@ func main() {
 		log.Fatalf("could not start exporter: %s", err.Error())
 	}
 	defer ex.Conn.Close()
-	log.Infof("dish id: %s hardware: %s software: %s", ex.DishID, ex.Hardware, ex.Software)
 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(ex)

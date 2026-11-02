@@ -32,7 +32,9 @@ scrape_configs:
 
 `starlink_dish_up` is 1 when `get_status` succeeded. `starlink_dish_history_up` is 1 when `get_history` succeeded. `/health` reports the gRPC connection state.
 
-Restart the exporter after a dish firmware update. Reflection runs once at startup, so a new schema is picked up on the next start.
+The process still serves `/metrics` when the dish is powered off or unreachable. Those scrapes set `starlink_dish_up` to 0 and publish `starlink_dish_state` 5 with `starlink_dish_state_name{state="OFF"}` 1. Each dish call is limited to 3 seconds, so a down dish does not hold the scrape until Prometheus times it out. The schema is loaded on the next successful scrape if startup could not reach the dish.
+
+Restart the exporter after a dish firmware update. Reflection runs once the dish answers, so a new schema is picked up on the next start after an update.
 
 ## Metrics
 
@@ -40,7 +42,7 @@ Identity and link:
 
 - `starlink_dish_info` labels: `device_id`, `hardware_version`, `software_version`, `country_code`, `utc_offset`
 - `starlink_dish_uptime_seconds`, `starlink_dish_bootcount`
-- `starlink_dish_state` (`0` unknown, `1` connected, `2` searching, `3` booting, `4` any other outage) and `starlink_dish_state_name{state=...}`
+- `starlink_dish_state` (`0` unknown, `1` connected, `2` searching, `3` booting, `4` any other outage, `5` off / dish did not respond) and `starlink_dish_state_name{state=...}`
 - `starlink_dish_outage_active`
 - `starlink_dish_service` labels for class of service, disablement, NAT, software-update state, and downlink/uplink restriction
 - `starlink_dish_pop_ping_latency_seconds`

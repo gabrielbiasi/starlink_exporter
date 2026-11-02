@@ -25,8 +25,8 @@ var (
 	)
 	dishUptimeSeconds = dishDesc("uptime_seconds", "Seconds since the dish last booted.")
 	dishBootCount     = dishDesc("bootcount", "Number of times the dish has booted.")
-	dishState         = dishDesc("state", "Dish connectivity as a number: 0 unknown, 1 connected, 2 searching, 3 booting, 4 other outage.")
-	dishStateName     = dishDesc("state_name", "Current connectivity state. Value is 1 for the active state.", "state")
+	dishState         = dishDesc("state", "Dish connectivity as a number: 0 unknown, 1 connected, 2 searching, 3 booting, 4 other outage, 5 off (dish did not respond).")
+	dishStateName     = dishDesc("state_name", "Current connectivity state. Value is 1 for the active state. state=OFF means the dish did not respond.", "state")
 	dishService       = dishDesc(
 		"service",
 		"Service and policy flags reported by the dish. Value is always 1.",

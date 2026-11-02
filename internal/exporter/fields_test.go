@@ -30,6 +30,7 @@ func TestStateNumber(t *testing.T) {
 		"SKY_SEARCH":  2,
 		"NO_SCHEDULE": 2,
 		"BOOTING":     3,
+		"OFF":         5,
 		"":            0,
 		"OBSTRUCTED":  4,
 		"NO_PINGS":    4,
